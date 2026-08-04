@@ -1,5 +1,3 @@
-import pytest
-
 from app.utils.stop_words import ESOTERIC_STOP_WORDS
 from app.utils.validators import (
     extract_json_from_text,
@@ -25,6 +23,16 @@ ESOTERIC_JSON = """{
   "reflection_question": "Какова ваша судьба?",
   "potential_triggers": ["карма"],
   "tags": ["духовность", "ангел"]
+}"""
+
+RELIGIOUS_IMAGE_PSYCHOLOGICAL_JSON = """{
+  "key_images": ["ангел", "церковь", "свет"],
+  "emotional_focus": "тревога",
+  "interpretation": "Образ ангела и церкви во сне может отражать потребность в защите, поддержке или моральной опоре. С точки зрения психологии это проекция внутренних ресурсов и поиска безопасности в период неопределённости, а не буквальное послание извне.",
+  "associations_question": "С чем у вас лично ассоциируется образ ангела или церкви?",
+  "reflection_question": "В каких ситуациях вам сейчас особенно нужна поддержка или чувство опоры?",
+  "potential_triggers": ["стресс", "поиск поддержки", "неопределённость"],
+  "tags": ["защита", "опора", "тревога"]
 }"""
 
 
@@ -53,6 +61,10 @@ class TestStopWords:
         assert "карма" in words
         assert "знак свыше" in words
 
+    def test_false_positives_substrings(self):
+        assert find_stop_words("мне надо идти на край") == []
+        assert find_stop_words("богатый опыт анализа") == []
+
     def test_all_stop_words_are_lowercase(self):
         for word in ESOTERIC_STOP_WORDS:
             assert word == word.lower()
@@ -70,6 +82,11 @@ class TestValidateInterpretation:
         result = validate_interpretation(ESOTERIC_JSON)
         assert not result.is_valid
         assert len(result.found_stop_words) > 0
+
+    def test_religious_images_with_psychological_analysis_allowed(self):
+        result = validate_interpretation(RELIGIOUS_IMAGE_PSYCHOLOGICAL_JSON)
+        assert result.is_valid, result.errors
+        assert "ангел" in result.data.key_images
 
     def test_missing_fields(self):
         incomplete = '{"key_images": ["лес"]}'

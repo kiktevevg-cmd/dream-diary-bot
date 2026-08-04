@@ -4,7 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.utils.stop_words import ESOTERIC_STOP_WORDS
+from app.utils.stop_words import ESOTERIC_STOP_WORDS, ESOTERIC_WORD_BOUNDARIES
 
 REQUIRED_FIELDS = [
     "key_images",
@@ -15,6 +15,15 @@ REQUIRED_FIELDS = [
     "potential_triggers",
     "tags",
 ]
+
+# Стоп-слова ищем только в аналитических полях — не в образах/тегах сна.
+ANALYSIS_FIELDS = (
+    "interpretation",
+    "associations_question",
+    "reflection_question",
+    "potential_triggers",
+    "emotional_focus",
+)
 
 
 class DreamInterpretation(BaseModel):
@@ -62,12 +71,26 @@ def extract_json_from_text(text: str) -> dict[str, Any] | None:
 
 def find_stop_words(text: str) -> list[str]:
     text_lower = text.lower()
-    return [word for word in ESOTERIC_STOP_WORDS if word in text_lower]
+    found = [word for word in ESOTERIC_STOP_WORDS if word in text_lower]
+    for word in ESOTERIC_WORD_BOUNDARIES:
+        if re.search(rf"(?<![а-яёa-z]){re.escape(word)}(?![а-яёa-z])", text_lower):
+            found.append(word)
+    return found
+
+
+def _analysis_text(data: dict[str, Any]) -> str:
+    parts: list[str] = []
+    for field in ANALYSIS_FIELDS:
+        value = data.get(field)
+        if isinstance(value, list):
+            parts.extend(str(item) for item in value)
+        elif value is not None:
+            parts.append(str(value))
+    return "\n".join(parts)
 
 
 def validate_interpretation(raw_response: str) -> ValidationResult:
     errors: list[str] = []
-    found_stop_words: list[str] = []
 
     data = extract_json_from_text(raw_response)
     if data is None:
@@ -77,8 +100,7 @@ def validate_interpretation(raw_response: str) -> ValidationResult:
     if missing:
         errors.append(f"Missing fields: {', '.join(missing)}")
 
-    all_text = json.dumps(data, ensure_ascii=False)
-    found_stop_words = find_stop_words(all_text)
+    found_stop_words = find_stop_words(_analysis_text(data))
     if found_stop_words:
         errors.append(f"Esoteric terms found: {', '.join(found_stop_words)}")
 

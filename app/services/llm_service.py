@@ -3,7 +3,7 @@ import asyncio
 import httpx
 
 from app.core.config import settings
-from app.services.prompts import FALLBACK_INTERPRETATION, REINFORCEMENT_PROMPT, SYSTEM_PROMPT
+from app.services.prompts import REINFORCEMENT_PROMPT, SYSTEM_PROMPT
 from app.utils.logger import get_logger
 from app.utils.validators import DreamInterpretation, validate_interpretation
 
@@ -163,6 +163,7 @@ class LLMService:
                 attempt=attempt + 1,
                 errors=validation.errors,
                 stop_words=validation.found_stop_words,
+                raw_preview=raw_response[:500],
             )
 
             messages.append({"role": "assistant", "content": raw_response})
@@ -171,11 +172,22 @@ class LLMService:
             else:
                 messages.append({
                     "role": "user",
-                    "content": "Ответ не соответствует формату. Верни строго JSON со всеми полями.",
+                    "content": (
+                        "Ответ не соответствует формату. Верни строго JSON со всеми полями: "
+                        "key_images, emotional_focus, interpretation (100-200 слов), "
+                        "associations_question, reflection_question, potential_triggers, tags. "
+                        "Без markdown и пояснений вне JSON."
+                    ),
                 })
 
-        logger.error("interpretation_fallback_used")
-        return DreamInterpretation(**FALLBACK_INTERPRETATION)
+        logger.error(
+            "interpretation_fallback_used",
+            hint="LLM ответил, но валидация не прошла 3 раза",
+        )
+        raise LLMServiceError(
+            "Kimi вернул ответ, но он не прошёл проверку формата. "
+            "Попробуйте переформулировать сон или повторить позже."
+        )
 
 
 llm_service = LLMService()
