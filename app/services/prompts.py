@@ -47,10 +47,12 @@ SYSTEM_PROMPT = """Ты — профессиональный психолог-а
 }
 
 Требования к объёму:
-- key_images_analysis: 2–5 образов
-- potential_triggers: 2–4 пункта
-- self_analysis_questions: 4–6 вопросов
-- Весь анализ строго психологический, без эзотерики"""
+- key_images_analysis: 2–4 образа, каждый analysis 40–80 слов
+- potential_triggers: 2–3 пункта, description 30–60 слов
+- self_analysis_questions: 4–5 вопросов
+- closing_observation: 40–70 слов
+- Весь анализ строго психологический, без эзотерики. Пиши содержательно, но компактно.
+"""
 
 REINFORCEMENT_PROMPT = (
     "Твой предыдущий ответ содержал эзотерические или мистические трактовки, что запрещено. "

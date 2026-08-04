@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import httpx
 
@@ -26,6 +27,8 @@ class LLMService:
         payload: dict = {
             "model": self.model,
             "messages": messages,
+            "stream": True,
+            "max_tokens": 3500,
         }
         # kimi-k2.6 думает по умолчанию — это долго и часто упирается в таймаут
         if self.model.startswith("kimi-k2"):
@@ -37,16 +40,26 @@ class LLMService:
             payload["response_format"] = {"type": "json_object"}
         return payload
 
-    @staticmethod
-    def _extract_content(data: dict) -> str:
-        message = data["choices"][0]["message"]
-        content = message.get("content")
-        if isinstance(content, list):
-            content = "".join(
-                part.get("text", "") for part in content if isinstance(part, dict)
-            )
-        content = content or message.get("reasoning_content") or ""
-        return content.strip() if isinstance(content, str) else ""
+    async def _read_stream(self, response: httpx.Response) -> str:
+        chunks: list[str] = []
+        async for line in response.aiter_lines():
+            if not line or not line.startswith("data:"):
+                continue
+            data = line[5:].strip()
+            if not data or data == "[DONE]":
+                continue
+            try:
+                payload = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            choices = payload.get("choices") or []
+            if not choices:
+                continue
+            delta = choices[0].get("delta") or {}
+            piece = delta.get("content") or delta.get("reasoning_content") or ""
+            if piece:
+                chunks.append(piece)
+        return "".join(chunks).strip()
 
     async def _call_llm(self, messages: list[dict[str, str]], *, json_mode: bool = True) -> str:
         if not self.api_key:
@@ -55,9 +68,11 @@ class LLMService:
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
+            "Accept": "text/event-stream",
         }
         payload = self._build_payload(messages, json_mode=json_mode)
-        timeout = httpx.Timeout(self.timeout, connect=20.0)
+        # При stream read-timeout — пауза между чанками, а не вся генерация целиком
+        timeout = httpx.Timeout(connect=20.0, read=self.timeout, write=30.0, pool=30.0)
         last_error = "unknown"
 
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -69,39 +84,51 @@ class LLMService:
                         model=self.model,
                         api_base=self.api_base,
                         json_mode=json_mode,
+                        stream=True,
+                        timeout=self.timeout,
                     )
-                    response = await client.post(
+                    async with client.stream(
+                        "POST",
                         f"{self.api_base}/chat/completions",
                         headers=headers,
                         json=payload,
-                    )
-                    body = response.text[:800]
-                    if response.status_code == 400 and json_mode and "json" in body.lower():
-                        logger.warning("llm_json_mode_unsupported", model=self.model, body=body)
-                        return await self._call_llm(messages, json_mode=False)
+                    ) as response:
+                        if response.status_code == 400 and json_mode:
+                            body = (await response.aread()).decode("utf-8", errors="replace")[:800]
+                            if "json" in body.lower() or "response_format" in body.lower():
+                                logger.warning("llm_json_mode_unsupported", model=self.model, body=body)
+                                return await self._call_llm(messages, json_mode=False)
+                            last_error = f"400 — {body[:200]}"
+                            logger.warning("llm_http_error", status=400, body=body)
+                            if attempt < self.max_retries - 1:
+                                await asyncio.sleep(1 + attempt)
+                                continue
+                            raise LLMServiceError(f"Kimi API error: {last_error}")
 
-                    if response.status_code >= 400:
-                        logger.warning(
-                            "llm_http_error",
-                            attempt=attempt + 1,
-                            status=response.status_code,
-                            model=self.model,
-                            api_base=self.api_base,
-                            body=body,
-                        )
-                        if response.status_code in {401, 403}:
-                            raise LLMServiceError("Неверный KIMI_API_KEY или нет доступа к модели")
-                        if response.status_code == 404:
-                            raise LLMServiceError(
-                                f"Модель {self.model} недоступна. Укажите LLM_MODEL=kimi-k2.6"
+                        if response.status_code >= 400:
+                            body = (await response.aread()).decode("utf-8", errors="replace")[:800]
+                            logger.warning(
+                                "llm_http_error",
+                                attempt=attempt + 1,
+                                status=response.status_code,
+                                model=self.model,
+                                api_base=self.api_base,
+                                body=body,
                             )
-                        last_error = f"{response.status_code} — {body[:200]}"
-                        if attempt < self.max_retries - 1:
-                            await asyncio.sleep(1 + attempt)
-                            continue
-                        raise LLMServiceError(f"Kimi API error: {last_error}")
+                            if response.status_code in {401, 403}:
+                                raise LLMServiceError("Неверный KIMI_API_KEY или нет доступа к модели")
+                            if response.status_code == 404:
+                                raise LLMServiceError(
+                                    f"Модель {self.model} недоступна. Укажите LLM_MODEL=kimi-k2.6"
+                                )
+                            last_error = f"{response.status_code} — {body[:200]}"
+                            if attempt < self.max_retries - 1:
+                                await asyncio.sleep(1 + attempt)
+                                continue
+                            raise LLMServiceError(f"Kimi API error: {last_error}")
 
-                    content = self._extract_content(response.json())
+                        content = await self._read_stream(response)
+
                     if not content:
                         raise LLMServiceError("Kimi API вернул пустой ответ")
                     logger.info("llm_request_ok", attempt=attempt + 1, chars=len(content))
@@ -144,15 +171,10 @@ class LLMService:
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": f"Проанализируй следующий сон:\n\n{dream_text}"},
         ]
-        # Ревалидация ответа — отдельно от сетевых ретраев
-        validation_attempts = 3
+        validation_attempts = 2
 
         for attempt in range(validation_attempts):
-            try:
-                raw_response = await self._call_llm(messages)
-            except LLMServiceError:
-                raise
-
+            raw_response = await self._call_llm(messages)
             validation = validate_interpretation(raw_response)
             if validation.is_valid and validation.data:
                 logger.info("dream_interpreted", attempt=attempt + 1)
@@ -177,14 +199,11 @@ class LLMService:
                         "intro, key_images, key_images_analysis[{image, analysis}], emotional_focus, "
                         "potential_triggers[{title, description}], self_analysis_questions, "
                         "closing_observation, reflection_question, tags. "
-                        "Без markdown и пояснений вне JSON."
+                        "Без markdown и пояснений вне JSON. Пиши компактнее."
                     ),
                 })
 
-        logger.error(
-            "interpretation_fallback_used",
-            hint="LLM ответил, но валидация не прошла 3 раза",
-        )
+        logger.error("interpretation_fallback_used")
         raise LLMServiceError(
             "Kimi вернул ответ, но он не прошёл проверку формата. "
             "Попробуйте переформулировать сон или повторить позже."
