@@ -1,4 +1,4 @@
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -25,15 +25,19 @@ class Settings(BaseSettings):
     redis_port: int = 6379
     redis_db: int = 0
 
-    # LLM
-    llm_api_key: str = ""
-    llm_api_base: str = "https://api.openai.com/v1"
-    llm_model: str = "gpt-4o-mini"
-    llm_timeout: int = 30
+    # LLM — Kimi (Moonshot API, OpenAI-compatible)
+    llm_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("KIMI_API_KEY", "LLM_API_KEY", "MOONSHOT_API_KEY"),
+    )
+    llm_api_base: str = "https://api.moonshot.ai/v1"
+    llm_model: str = "moonshot-v1-32k"
+    llm_timeout: int = 60
     llm_max_retries: int = 3
 
-    # Whisper
+    # Whisper (отдельно от Kimi — у Moonshot нет speech-to-text)
     whisper_api_key: str = ""
+    whisper_api_base: str = "https://api.openai.com/v1"
     whisper_model: str = "whisper-1"
 
     # Security
@@ -64,6 +68,10 @@ class Settings(BaseSettings):
         if self.redis_url_override:
             return self.redis_url_override
         return f"redis://{self.redis_host}:{self.redis_port}/{self.redis_db}"
+
+    @property
+    def voice_enabled(self) -> bool:
+        return bool(self.whisper_api_key)
 
 
 settings = Settings()

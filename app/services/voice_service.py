@@ -14,11 +14,22 @@ class VoiceServiceError(Exception):
 
 class VoiceService:
     def __init__(self) -> None:
-        self.client = AsyncOpenAI(
-            api_key=settings.whisper_api_key or settings.llm_api_key,
-            base_url=settings.llm_api_base,
-        )
+        self._client: AsyncOpenAI | None = None
         self.model = settings.whisper_model
+
+    @property
+    def client(self) -> AsyncOpenAI:
+        if not settings.whisper_api_key:
+            raise VoiceServiceError(
+                "Голосовые сообщения недоступны: задайте WHISPER_API_KEY (OpenAI Whisper). "
+                "Kimi API не поддерживает распознавание речи."
+            )
+        if self._client is None:
+            self._client = AsyncOpenAI(
+                api_key=settings.whisper_api_key,
+                base_url=settings.whisper_api_base,
+            )
+        return self._client
 
     async def transcribe(self, audio_bytes: bytes, filename: str = "voice.ogg") -> str:
         try:

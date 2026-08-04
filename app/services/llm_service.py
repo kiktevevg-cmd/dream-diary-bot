@@ -1,12 +1,11 @@
 import asyncio
-from typing import Any
 
 import httpx
 
 from app.core.config import settings
 from app.services.prompts import FALLBACK_INTERPRETATION, REINFORCEMENT_PROMPT, SYSTEM_PROMPT
 from app.utils.logger import get_logger
-from app.utils.validators import DreamInterpretation, ValidationResult, validate_interpretation
+from app.utils.validators import DreamInterpretation, validate_interpretation
 
 logger = get_logger(__name__)
 
@@ -23,17 +22,21 @@ class LLMService:
         self.timeout = settings.llm_timeout
         self.max_retries = settings.llm_max_retries
 
-    async def _call_llm(self, messages: list[dict[str, str]]) -> str:
+    async def _call_llm(self, messages: list[dict[str, str]], *, json_mode: bool = True) -> str:
+        if not self.api_key:
+            raise LLMServiceError("KIMI_API_KEY не задан")
+
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
-        payload = {
+        payload: dict = {
             "model": self.model,
             "messages": messages,
             "temperature": 0.7,
-            "response_format": {"type": "json_object"},
         }
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             for attempt in range(self.max_retries):
@@ -43,9 +46,28 @@ class LLMService:
                         headers=headers,
                         json=payload,
                     )
+                    if response.status_code == 400 and json_mode:
+                        logger.warning("llm_json_mode_unsupported", model=self.model)
+                        return await self._call_llm(messages, json_mode=False)
+
                     response.raise_for_status()
                     data = response.json()
                     return data["choices"][0]["message"]["content"]
+                except httpx.HTTPStatusError as e:
+                    body = e.response.text[:500] if e.response else ""
+                    logger.warning(
+                        "llm_request_failed",
+                        attempt=attempt + 1,
+                        status=e.response.status_code if e.response else None,
+                        error=str(e),
+                        body=body,
+                    )
+                    if attempt < self.max_retries - 1:
+                        await asyncio.sleep(2 ** attempt)
+                    else:
+                        raise LLMServiceError(
+                            f"Kimi API error: {e.response.status_code if e.response else 'unknown'}"
+                        ) from e
                 except (httpx.HTTPError, KeyError, IndexError) as e:
                     logger.warning("llm_request_failed", attempt=attempt + 1, error=str(e))
                     if attempt < self.max_retries - 1:

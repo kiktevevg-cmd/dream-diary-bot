@@ -42,8 +42,8 @@ pytest tests/ -v
 - **Backend:** FastAPI + Aiogram 3.x
 - **БД:** PostgreSQL + SQLAlchemy async
 - **Кеш:** Redis
-- **LLM:** OpenAI-compatible API
-- **Голос:** Whisper API
+- **LLM:** Kimi (Moonshot API)
+- **Голос:** OpenAI Whisper (опционально, отдельный ключ)
 
 ## Команды бота
 
@@ -64,10 +64,13 @@ pytest tests/ -v
 2. Добавьте плагины **PostgreSQL** и **Redis** — Railway автоматически проставит `DATABASE_URL` и `REDIS_URL`
 3. Задайте переменные окружения:
    - `BOT_TOKEN` — токен Telegram-бота
-   - `LLM_API_KEY` — ключ OpenAI (или совместимого API)
+   - `KIMI_API_KEY` — ключ [Kimi API](https://platform.moonshot.cn/console/api-keys)
+   - `LLM_API_BASE` — `https://api.moonshot.ai/v1` (или `https://api.moonshot.cn/v1`)
+   - `LLM_MODEL` — `moonshot-v1-32k` (или `kimi-k2.5`, `kimi-k3`)
    - `ENCRYPTION_KEY` — ключ шифрования (32+ символов)
    - `WEBHOOK_URL` — публичный URL Railway (например `https://your-app.up.railway.app`)
    - `WEBHOOK_SECRET` — произвольная строка для защиты webhook
+   - `WHISPER_API_KEY` — (опционально) для голосовых сообщений
    - `ENVIRONMENT=production`
 4. Railway соберёт Docker-образ и запустит бота в webhook-режиме
 5. Проверьте: `https://your-app.up.railway.app/health`
