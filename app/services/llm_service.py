@@ -33,7 +33,8 @@ class LLMService:
         payload: dict = {
             "model": self.model,
             "messages": messages,
-            "temperature": 0.7,
+            # Kimi K2.6 / K3 принимают только temperature=1
+            "temperature": 1,
         }
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
