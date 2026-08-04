@@ -1,0 +1,27 @@
+---
+description: Архитектурные решения и технологический стек проекта
+globs: **/*.py, **/*.md
+---
+# Архитектура проекта
+## Технологии
+- FastAPI (асинхронный)
+- Aiogram 3.x (Telegram Bot API)
+- PostgreSQL + SQLAlchemy async
+- Redis (кеш, FSM-состояния)
+- LLM REST API (OpenAI-совместимый)
+- Whisper API (голос → текст)
+- Pydantic для валидации данных
+## Ключевые принципы
+- Все хендлеры Aiogram — асинхронные
+- Каждый webhook-запрос создает свежие экземпляры зависимостей (request-scoped)
+- Данные не хранятся в памяти между запросами — только в БД или Redis
+- Сервисы (LLM, БД) — через dependency injection
+- Все секреты — через переменные окружения
+- Шифрование текстов снов на уровне приложения (AES-256)
+## Структура
+- /app/handlers/ — хендлеры Aiogram
+- /app/services/ — бизнес-логика
+- /app/db/ — модели и CRUD
+- /app/core/ — конфиг, security
+- /app/keyboards/ — inline-клавиатуры
+- /app/utils/ — хелперы, валидаторы
