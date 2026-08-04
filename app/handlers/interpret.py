@@ -9,7 +9,7 @@ from aiogram.types import CallbackQuery, Message
 
 from app.db import crud
 from app.db.models import async_session
-from app.keyboards.buttons import format_interpretation, rating_keyboard
+from app.keyboards.buttons import format_interpretation, rating_keyboard, split_telegram_message
 from app.services.dream_service import dream_service
 from app.services.llm_service import LLMServiceError
 from app.services.voice_service import VoiceServiceError, voice_service
@@ -46,7 +46,10 @@ async def _process_dream(message: Message, bot: Bot, dream_text: str, transcript
                 session, user.id, dream_text, transcript
             )
             text = format_interpretation(interpretation)
-            await message.answer(text, reply_markup=rating_keyboard(dream_id))
+            parts = split_telegram_message(text)
+            for part in parts[:-1]:
+                await message.answer(part)
+            await message.answer(parts[-1], reply_markup=rating_keyboard(dream_id))
 
         except ValueError as e:
             await message.answer(f"⚠️ {e}")
@@ -208,9 +211,14 @@ async def process_clarification(message: Message, bot: Bot, state: FSMContext) -
 
         dream_text = crud.decrypt_dream_text(dream)
         question = message.text.strip()
+        prev = dream.interpretation or {}
+        analysis_bits = []
+        for item in prev.get("key_images_analysis") or []:
+            if isinstance(item, dict):
+                analysis_bits.append(f"{item.get('image')}: {item.get('analysis')}")
         combined = (
             f"Контекст сна: {dream_text}\n\n"
-            f"Предыдущая интерпретация: {dream.interpretation.get('interpretation', '')}\n\n"
+            f"Предыдущий разбор образов: {' | '.join(analysis_bits) or prev.get('closing_observation', '')}\n\n"
             f"Уточняющий вопрос пользователя: {question}"
         )
 

@@ -2,45 +2,91 @@ import json
 import re
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.utils.stop_words import ESOTERIC_STOP_WORDS, ESOTERIC_WORD_BOUNDARIES
 
 REQUIRED_FIELDS = [
+    "intro",
     "key_images",
+    "key_images_analysis",
     "emotional_focus",
-    "interpretation",
-    "associations_question",
-    "reflection_question",
     "potential_triggers",
+    "self_analysis_questions",
+    "closing_observation",
+    "reflection_question",
     "tags",
 ]
 
-# Стоп-слова ищем только в аналитических полях — не в образах/тегах сна.
-ANALYSIS_FIELDS = (
-    "interpretation",
-    "associations_question",
-    "reflection_question",
-    "potential_triggers",
-    "emotional_focus",
-)
+
+class ImageAnalysis(BaseModel):
+    image: str = Field(..., min_length=1)
+    analysis: str = Field(..., min_length=40)
+
+
+class TriggerItem(BaseModel):
+    title: str = Field(..., min_length=1)
+    description: str = Field(..., min_length=20)
 
 
 class DreamInterpretation(BaseModel):
+    intro: str = Field(..., min_length=20)
     key_images: list[str] = Field(..., min_length=1)
+    key_images_analysis: list[ImageAnalysis] = Field(..., min_length=1)
     emotional_focus: str
-    interpretation: str = Field(..., min_length=50)
-    associations_question: str
-    reflection_question: str
-    potential_triggers: list[str] = Field(..., min_length=1)
+    potential_triggers: list[TriggerItem] = Field(..., min_length=1)
+    self_analysis_questions: list[str] = Field(..., min_length=3)
+    closing_observation: str = Field(..., min_length=40)
+    reflection_question: str = Field(..., min_length=10)
     tags: list[str] = Field(..., min_length=1)
 
-    @field_validator("key_images", "potential_triggers", "tags", mode="before")
+    @field_validator("key_images", "self_analysis_questions", "tags", mode="before")
     @classmethod
-    def ensure_list(cls, v: Any) -> list[str]:
+    def ensure_str_list(cls, v: Any) -> list[str]:
         if isinstance(v, str):
             return [v]
         return v
+
+    @field_validator("key_images_analysis", mode="before")
+    @classmethod
+    def normalize_image_analysis(cls, v: Any) -> list[dict[str, str]]:
+        if not isinstance(v, list):
+            return v
+        normalized: list[dict[str, str]] = []
+        for item in v:
+            if isinstance(item, str):
+                normalized.append({"image": item, "analysis": item})
+            elif isinstance(item, dict):
+                normalized.append(item)
+            else:
+                normalized.append({"image": str(item), "analysis": str(item)})
+        return normalized
+
+    @field_validator("potential_triggers", mode="before")
+    @classmethod
+    def normalize_triggers(cls, v: Any) -> list[dict[str, str]]:
+        if not isinstance(v, list):
+            return v
+        normalized: list[dict[str, str]] = []
+        for item in v:
+            if isinstance(item, str):
+                normalized.append({"title": item, "description": item})
+            elif isinstance(item, dict):
+                if "title" in item and "description" not in item:
+                    item = {**item, "description": item.get("title", "")}
+                normalized.append(item)
+            else:
+                normalized.append({"title": str(item), "description": str(item)})
+        return normalized
+
+    @model_validator(mode="after")
+    def fill_key_images_from_analysis(self) -> "DreamInterpretation":
+        if not self.key_images and self.key_images_analysis:
+            self.key_images = [item.image for item in self.key_images_analysis]
+        return self
+
+    def trigger_titles(self) -> list[str]:
+        return [t.title for t in self.potential_triggers]
 
 
 class ValidationResult(BaseModel):
@@ -79,13 +125,25 @@ def find_stop_words(text: str) -> list[str]:
 
 
 def _analysis_text(data: dict[str, Any]) -> str:
-    parts: list[str] = []
-    for field in ANALYSIS_FIELDS:
-        value = data.get(field)
-        if isinstance(value, list):
-            parts.extend(str(item) for item in value)
-        elif value is not None:
-            parts.append(str(value))
+    parts: list[str] = [
+        str(data.get("intro", "")),
+        str(data.get("emotional_focus", "")),
+        str(data.get("closing_observation", "")),
+        str(data.get("reflection_question", "")),
+    ]
+    for item in data.get("key_images_analysis") or []:
+        if isinstance(item, dict):
+            parts.append(str(item.get("analysis", "")))
+        else:
+            parts.append(str(item))
+    for item in data.get("potential_triggers") or []:
+        if isinstance(item, dict):
+            parts.append(str(item.get("title", "")))
+            parts.append(str(item.get("description", "")))
+        else:
+            parts.append(str(item))
+    for question in data.get("self_analysis_questions") or []:
+        parts.append(str(question))
     return "\n".join(parts)
 
 

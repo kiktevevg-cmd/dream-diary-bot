@@ -174,8 +174,9 @@ class LLMService:
                     "role": "user",
                     "content": (
                         "Ответ не соответствует формату. Верни строго JSON со всеми полями: "
-                        "key_images, emotional_focus, interpretation (100-200 слов), "
-                        "associations_question, reflection_question, potential_triggers, tags. "
+                        "intro, key_images, key_images_analysis[{image, analysis}], emotional_focus, "
+                        "potential_triggers[{title, description}], self_analysis_questions, "
+                        "closing_observation, reflection_question, tags. "
                         "Без markdown и пояснений вне JSON."
                     ),
                 })

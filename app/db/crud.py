@@ -58,7 +58,10 @@ async def update_dream_interpretation(
     dream.interpretation = interpretation
     dream.emotional_focus = interpretation.get("emotional_focus")
     dream.tags = interpretation.get("tags", [])
-    dream.potential_triggers = interpretation.get("potential_triggers", [])
+    triggers = interpretation.get("potential_triggers", [])
+    dream.potential_triggers = [
+        t.get("title", str(t)) if isinstance(t, dict) else str(t) for t in triggers
+    ]
     dream.is_analyzed = True
     dream.processed_at = datetime.now(timezone.utc)
     await session.flush()

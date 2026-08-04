@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     )
     llm_api_base: str = "https://api.moonshot.ai/v1"
     llm_model: str = "kimi-k2.6"
-    llm_timeout: int = 60
+    llm_timeout: int = 90
     llm_max_retries: int = 2
 
     # Whisper (отдельно от Kimi — у Moonshot нет speech-to-text)
