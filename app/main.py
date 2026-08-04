@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
@@ -13,14 +14,32 @@ from app.utils.logger import get_logger, setup_logging
 setup_logging()
 logger = get_logger(__name__)
 
+STARTUP_TIMEOUT_SEC = 20
+
+
+async def _startup() -> None:
+    try:
+        await asyncio.wait_for(init_db(), timeout=STARTUP_TIMEOUT_SEC)
+        logger.info("db_initialized")
+    except TimeoutError:
+        logger.error("db_init_timeout", hint="Check DATABASE_URL and PostgreSQL plugin on Railway")
+    except Exception as e:
+        logger.error("db_init_failed", error=str(e), hint="Add PostgreSQL plugin on Railway")
+
+    if settings.webhook_url:
+        try:
+            await setup_webhook(bot)
+        except Exception as e:
+            logger.error("webhook_setup_failed", error=str(e))
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("app_starting", environment=settings.environment)
-    await init_db()
-    if settings.webhook_url:
-        await setup_webhook(bot)
+    startup_task = asyncio.create_task(_startup())
     yield
+    if not startup_task.done():
+        startup_task.cancel()
     if settings.webhook_url:
         await remove_webhook(bot)
     await bot.session.close()

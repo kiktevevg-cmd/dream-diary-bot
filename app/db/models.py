@@ -81,7 +81,11 @@ class Feedback(Base):
     dream: Mapped["Dream"] = relationship(back_populates="feedback")
 
 
-engine = create_async_engine(settings.database_url, echo=settings.environment == "development")
+engine = create_async_engine(
+    settings.database_url,
+    echo=settings.environment == "development",
+    connect_args={"timeout": 10},
+)
 async_session = async_sessionmaker(engine, expire_on_commit=False)
 
 

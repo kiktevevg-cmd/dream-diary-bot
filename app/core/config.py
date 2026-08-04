@@ -31,8 +31,8 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("KIMI_API_KEY", "LLM_API_KEY", "MOONSHOT_API_KEY"),
     )
     llm_api_base: str = "https://api.moonshot.ai/v1"
-    llm_model: str = "moonshot-v1-32k"
-    llm_timeout: int = 60
+    llm_model: str = "kimi-k2.6"
+    llm_timeout: int = 90
     llm_max_retries: int = 3
 
     # Whisper (отдельно от Kimi — у Moonshot нет speech-to-text)

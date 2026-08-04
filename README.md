@@ -66,7 +66,7 @@ pytest tests/ -v
    - `BOT_TOKEN` — токен Telegram-бота
    - `KIMI_API_KEY` — ключ [Kimi API](https://platform.moonshot.cn/console/api-keys)
    - `LLM_API_BASE` — `https://api.moonshot.ai/v1` (или `https://api.moonshot.cn/v1`)
-   - `LLM_MODEL` — `moonshot-v1-32k` (или `kimi-k2.5`, `kimi-k3`)
+   - `LLM_MODEL` — `kimi-k2.6` (или `kimi-k3`)
    - `ENCRYPTION_KEY` — ключ шифрования (32+ символов)
    - `WEBHOOK_URL` — публичный URL Railway (например `https://your-app.up.railway.app`)
    - `WEBHOOK_SECRET` — произвольная строка для защиты webhook

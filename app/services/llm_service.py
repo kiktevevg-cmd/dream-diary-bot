@@ -52,24 +52,42 @@ class LLMService:
 
                     response.raise_for_status()
                     data = response.json()
-                    return data["choices"][0]["message"]["content"]
+                    message = data["choices"][0]["message"]
+                    content = message.get("content") or message.get("reasoning_content") or ""
+                    if not content:
+                        raise LLMServiceError("Kimi API вернул пустой ответ")
+                    return content
                 except httpx.HTTPStatusError as e:
-                    body = e.response.text[:500] if e.response else ""
+                    body = e.response.text[:800] if e.response else ""
+                    status = e.response.status_code if e.response else None
                     logger.warning(
                         "llm_request_failed",
                         attempt=attempt + 1,
-                        status=e.response.status_code if e.response else None,
+                        status=status,
+                        model=self.model,
+                        api_base=self.api_base,
                         error=str(e),
                         body=body,
                     )
+                    if status in {401, 403}:
+                        raise LLMServiceError("Неверный KIMI_API_KEY или нет доступа к модели") from e
+                    if status == 404:
+                        raise LLMServiceError(
+                            f"Модель {self.model} недоступна. Укажите LLM_MODEL=kimi-k2.6"
+                        ) from e
                     if attempt < self.max_retries - 1:
                         await asyncio.sleep(2 ** attempt)
                     else:
-                        raise LLMServiceError(
-                            f"Kimi API error: {e.response.status_code if e.response else 'unknown'}"
-                        ) from e
-                except (httpx.HTTPError, KeyError, IndexError) as e:
-                    logger.warning("llm_request_failed", attempt=attempt + 1, error=str(e))
+                        raise LLMServiceError(f"Kimi API error: {status} — {body[:200]}") from e
+                except LLMServiceError:
+                    raise
+                except (httpx.HTTPError, KeyError, IndexError, TypeError) as e:
+                    logger.warning(
+                        "llm_request_failed",
+                        attempt=attempt + 1,
+                        model=self.model,
+                        error=str(e),
+                    )
                     if attempt < self.max_retries - 1:
                         await asyncio.sleep(2 ** attempt)
                     else:

@@ -51,10 +51,13 @@ async def _process_dream(message: Message, bot: Bot, dream_text: str, transcript
         except ValueError as e:
             await message.answer(f"⚠️ {e}")
 
-        except LLMServiceError:
+        except LLMServiceError as e:
+            logger.error("llm_unavailable", error=str(e))
             await message.answer(
-                "😔 Извините, сейчас сервис перегружен. "
-                "Ваш сон сохранён — попробуйте через минуту, отправив тот же текст."
+                "😔 Не удалось получить интерпретацию от Kimi.\n"
+                f"<code>{e}</code>\n\n"
+                "Ваш сон сохранён — проверьте KIMI_API_KEY и LLM_MODEL на Railway, "
+                "затем отправьте текст ещё раз."
             )
 
 
