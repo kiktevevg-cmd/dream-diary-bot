@@ -15,9 +15,9 @@ bot = Bot(
 dp = Dispatcher(storage=storage)
 
 dp.include_router(start.router)
+dp.include_router(settings_handler.router)
 dp.include_router(interpret.router)
 dp.include_router(history.router)
 dp.include_router(stats.router)
 dp.include_router(insights.router)
-dp.include_router(settings_handler.router)
 dp.include_router(admin.router)

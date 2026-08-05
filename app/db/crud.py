@@ -4,7 +4,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import decrypt_text, encrypt_text
-from app.db.models import Dream, Feedback, User
+from app.db.models import Dream, DreamMessage, Feedback, Insight, User
 
 
 async def get_or_create_user(
@@ -63,9 +63,92 @@ async def update_dream_interpretation(
         t.get("title", str(t)) if isinstance(t, dict) else str(t) for t in triggers
     ]
     dream.is_analyzed = True
+    dream.dialogue_status = "active"
     dream.processed_at = datetime.now(timezone.utc)
     await session.flush()
     return dream
+
+
+async def get_active_dream(session: AsyncSession, user_id: int) -> Dream | None:
+    result = await session.execute(
+        select(Dream)
+        .where(Dream.user_id == user_id, Dream.dialogue_status == "active")
+        .order_by(Dream.created_at.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def close_active_dialogues(session: AsyncSession, user_id: int) -> None:
+    await session.execute(
+        update(Dream)
+        .where(Dream.user_id == user_id, Dream.dialogue_status == "active")
+        .values(dialogue_status="closed")
+    )
+
+
+async def close_dream_dialogue(
+    session: AsyncSession,
+    dream_id: int,
+    user_id: int,
+    summary: str | None = None,
+) -> bool:
+    values: dict = {"dialogue_status": "closed"}
+    if summary:
+        values["dialogue_summary"] = summary
+    result = await session.execute(
+        update(Dream).where(Dream.id == dream_id, Dream.user_id == user_id).values(**values)
+    )
+    return result.rowcount > 0
+
+
+async def add_dream_message(
+    session: AsyncSession,
+    dream_id: int,
+    user_id: int,
+    role: str,
+    content: str,
+) -> DreamMessage:
+    message = DreamMessage(dream_id=dream_id, user_id=user_id, role=role, content=content)
+    session.add(message)
+    await session.flush()
+    return message
+
+
+async def get_dream_messages(
+    session: AsyncSession,
+    dream_id: int,
+    limit: int = 40,
+) -> list[DreamMessage]:
+    result = await session.execute(
+        select(DreamMessage)
+        .where(DreamMessage.dream_id == dream_id)
+        .order_by(DreamMessage.created_at.asc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+async def create_insight(
+    session: AsyncSession,
+    user_id: int,
+    text: str,
+    dream_id: int | None = None,
+) -> Insight:
+    insight = Insight(user_id=user_id, dream_id=dream_id, text=text)
+    session.add(insight)
+    await session.flush()
+    return insight
+
+
+async def get_user_insights(session: AsyncSession, user_id: int, limit: int = 20) -> list[Insight]:
+    result = await session.execute(
+        select(Insight)
+        .where(Insight.user_id == user_id)
+        .order_by(Insight.created_at.desc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
 
 
 async def get_dream_by_id(session: AsyncSession, dream_id: int, user_id: int) -> Dream | None:
@@ -172,6 +255,8 @@ async def clear_user_history(session: AsyncSession, user_id: int) -> int:
 
 
 async def delete_user_data(session: AsyncSession, user_id: int) -> None:
+    await session.execute(delete(Insight).where(Insight.user_id == user_id))
+    await session.execute(delete(DreamMessage).where(DreamMessage.user_id == user_id))
     await session.execute(delete(Feedback).where(Feedback.user_id == user_id))
     await session.execute(delete(Dream).where(Dream.user_id == user_id))
     await session.execute(delete(User).where(User.id == user_id))

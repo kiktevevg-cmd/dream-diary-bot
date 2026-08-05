@@ -5,11 +5,22 @@ from aiogram.enums import ChatAction
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import Message
 
 from app.db import crud
 from app.db.models import async_session
-from app.keyboards.buttons import format_interpretation, rating_keyboard, split_telegram_message
+from app.keyboards.buttons import (
+    BTN_FINISH,
+    BTN_HISTORY,
+    BTN_INSIGHT,
+    BTN_MY_INSIGHTS,
+    BTN_NEW_DREAM,
+    BTN_SKIP,
+    MENU_BUTTONS,
+    format_interpretation,
+    main_menu_keyboard,
+    split_telegram_message,
+)
 from app.services.dream_service import dream_service
 from app.services.llm_service import LLMServiceError
 from app.services.voice_service import VoiceServiceError, voice_service
@@ -19,10 +30,9 @@ logger = get_logger(__name__)
 router = Router()
 
 
-class InterpretStates(StatesGroup):
-    waiting_for_tag = State()
+class DialogueStates(StatesGroup):
+    waiting_for_dream = State()
     waiting_for_insight = State()
-    waiting_for_clarification = State()
 
 
 async def _get_user(session, message: Message):
@@ -34,7 +44,18 @@ async def _get_user(session, message: Message):
     )
 
 
-async def _process_dream(message: Message, bot: Bot, dream_text: str, transcript: str | None = None) -> None:
+async def _send_parts(message: Message, text: str) -> None:
+    for part in split_telegram_message(text):
+        await message.answer(part, reply_markup=main_menu_keyboard())
+
+
+async def _process_dream(
+    message: Message,
+    bot: Bot,
+    state: FSMContext,
+    dream_text: str,
+    transcript: str | None = None,
+) -> None:
     await bot.send_chat_action(message.chat.id, ChatAction.TYPING)
 
     async with async_session() as session:
@@ -42,185 +63,209 @@ async def _process_dream(message: Message, bot: Bot, dream_text: str, transcript
         await session.commit()
 
         try:
-            dream_id, interpretation = await dream_service.process_dream(
+            _, interpretation = await dream_service.process_dream(
                 session, user.id, dream_text, transcript
             )
-            text = format_interpretation(interpretation)
-            parts = split_telegram_message(text)
-            for part in parts[:-1]:
-                await message.answer(part)
-            await message.answer(parts[-1], reply_markup=rating_keyboard(dream_id))
+            await state.clear()
+            await _send_parts(message, format_interpretation(interpretation))
 
         except ValueError as e:
-            await message.answer(f"⚠️ {e}")
+            await message.answer(f"⚠️ {e}", reply_markup=main_menu_keyboard())
 
         except LLMServiceError as e:
             logger.error("llm_unavailable", error=str(e))
             await message.answer(
-                "😔 Не удалось получить интерпретацию от Kimi.\n"
+                "Не удалось получить интерпретацию.\n"
                 f"<code>{e}</code>\n\n"
-                "Ваш сон сохранён — проверьте KIMI_API_KEY и LLM_MODEL на Railway, "
-                "затем отправьте текст ещё раз."
+                "Сон сохранён. Попробуйте ещё раз чуть позже или нажмите «Новый сон».",
+                reply_markup=main_menu_keyboard(),
             )
 
 
 @router.message(Command("interpret"))
-async def cmd_interpret(message: Message) -> None:
+async def cmd_interpret(message: Message, state: FSMContext) -> None:
+    await state.set_state(DialogueStates.waiting_for_dream)
     await message.answer(
-        "📝 Опишите ваш сон текстом или отправьте голосовое сообщение.\n"
-        "Максимум 4000 символов."
+        "Опишите сон текстом или голосовым сообщением (до 4000 символов).",
+        reply_markup=main_menu_keyboard(),
     )
 
 
-@router.message(F.voice)
-async def handle_voice(message: Message, bot: Bot) -> None:
-    if message.voice and message.voice.duration > 300:
-        await message.answer("⚠️ Голосовое сообщение слишком длинное (макс. 5 минут).")
+@router.message(F.text == BTN_NEW_DREAM)
+async def btn_new_dream(message: Message, state: FSMContext) -> None:
+    async with async_session() as session:
+        user = await _get_user(session, message)
+        await dream_service.start_new_dream(session, user.id)
+    await state.set_state(DialogueStates.waiting_for_dream)
+    await message.answer(
+        "Готов к новому сну. Опишите его текстом или голосом.",
+        reply_markup=main_menu_keyboard(),
+    )
+
+
+@router.message(F.text == BTN_SKIP)
+async def btn_skip(message: Message, bot: Bot, state: FSMContext) -> None:
+    await state.clear()
+    await bot.send_chat_action(message.chat.id, ChatAction.TYPING)
+    async with async_session() as session:
+        user = await _get_user(session, message)
+        try:
+            reply = await dream_service.continue_dialogue(
+                session,
+                user.id,
+                "Хочу пропустить текущий вопрос и перейти дальше.",
+                skip_question=True,
+            )
+            await _send_parts(message, reply)
+        except ValueError as e:
+            await message.answer(str(e), reply_markup=main_menu_keyboard())
+        except LLMServiceError as e:
+            await message.answer(f"Не удалось продолжить диалог: <code>{e}</code>", reply_markup=main_menu_keyboard())
+
+
+@router.message(F.text == BTN_FINISH)
+async def btn_finish(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    async with async_session() as session:
+        user = await _get_user(session, message)
+        text = await dream_service.finish_dialogue(session, user.id)
+    await message.answer(text, reply_markup=main_menu_keyboard())
+
+
+@router.message(F.text == BTN_INSIGHT)
+async def btn_insight(message: Message, state: FSMContext) -> None:
+    await state.set_state(DialogueStates.waiting_for_insight)
+    await message.answer(
+        "Запишите свой инсайт — мысль, вывод или ощущение, которое хотите сохранить.",
+        reply_markup=main_menu_keyboard(),
+    )
+
+
+@router.message(DialogueStates.waiting_for_insight, F.text)
+async def process_insight(message: Message, state: FSMContext) -> None:
+    if not message.text or message.text in MENU_BUTTONS:
+        return
+    async with async_session() as session:
+        user = await _get_user(session, message)
+        await dream_service.save_insight(session, user.id, message.text.strip())
+    await state.clear()
+    await message.answer(
+        "Инсайт сохранён. Посмотреть все можно в «Мои инсайты».",
+        reply_markup=main_menu_keyboard(),
+    )
+
+
+@router.message(F.text == BTN_MY_INSIGHTS)
+@router.message(Command("my_insights"))
+async def btn_my_insights(message: Message) -> None:
+    async with async_session() as session:
+        user = await _get_user(session, message)
+        insights = await crud.get_user_insights(session, user.id, limit=15)
+
+    if not insights:
+        await message.answer(
+            "Пока нет сохранённых инсайтов. Во время разбора нажмите «Инсайт».",
+            reply_markup=main_menu_keyboard(),
+        )
         return
 
+    lines = ["💡 <b>Ваши инсайты</b>\n"]
+    for i, item in enumerate(insights, 1):
+        date = item.created_at.strftime("%d.%m.%Y")
+        preview = item.text[:200] + ("..." if len(item.text) > 200 else "")
+        lines.append(f"<b>{i}.</b> {date}\n{preview}\n")
+    await message.answer("\n".join(lines), reply_markup=main_menu_keyboard())
+
+
+@router.message(F.text == BTN_HISTORY)
+async def btn_history(message: Message) -> None:
+    from app.handlers.history import cmd_history
+
+    await cmd_history(message)
+
+
+@router.message(F.voice)
+async def handle_voice(message: Message, bot: Bot, state: FSMContext) -> None:
+    if message.voice and message.voice.duration > 300:
+        await message.answer("Голосовое слишком длинное (макс. 5 минут).", reply_markup=main_menu_keyboard())
+        return
+
+    current = await state.get_state()
+    async with async_session() as session:
+        user = await _get_user(session, message)
+        active = await crud.get_active_dream(session, user.id)
+        has_active = active is not None
+
     await bot.send_chat_action(message.chat.id, ChatAction.TYPING)
-    status_msg = await message.answer("🎤 Распознаю голосовое сообщение...")
+    status_msg = await message.answer("Распознаю голосовое сообщение...")
 
     try:
         file = await bot.get_file(message.voice.file_id)
         file_bytes = io.BytesIO()
         await bot.download_file(file.file_path, file_bytes)
         transcript = await voice_service.transcribe(file_bytes.getvalue())
-        await status_msg.edit_text(f"📝 <b>Расшифровка:</b>\n{transcript}")
-        await _process_dream(message, bot, transcript, transcript=transcript)
+        await status_msg.edit_text(f"<b>Расшифровка:</b>\n{transcript}")
+
+        if has_active and current != DialogueStates.waiting_for_dream.state:
+            async with async_session() as session:
+                user = await _get_user(session, message)
+                reply = await dream_service.continue_dialogue(session, user.id, transcript)
+            await _send_parts(message, reply)
+        else:
+            await _process_dream(message, bot, state, transcript, transcript=transcript)
 
     except VoiceServiceError as e:
         await status_msg.edit_text(f"⚠️ {e}")
+    except LLMServiceError as e:
+        await message.answer(
+            f"Не удалось продолжить диалог: <code>{e}</code>",
+            reply_markup=main_menu_keyboard(),
+        )
+    except ValueError as e:
+        await message.answer(str(e), reply_markup=main_menu_keyboard())
+
+
+@router.message(DialogueStates.waiting_for_dream, F.text)
+async def handle_new_dream_text(message: Message, bot: Bot, state: FSMContext) -> None:
+    if not message.text or message.text in MENU_BUTTONS:
+        return
+    if len(message.text.strip()) < 10:
+        await message.answer("Опишите сон подробнее (минимум 10 символов).", reply_markup=main_menu_keyboard())
+        return
+    await _process_dream(message, bot, state, message.text.strip())
 
 
 @router.message(F.text & ~F.text.startswith("/"))
-async def handle_text_dream(message: Message, bot: Bot) -> None:
-    if not message.text or len(message.text.strip()) < 10:
-        await message.answer("⚠️ Опишите сон подробнее (минимум 10 символов).")
+async def handle_text(message: Message, bot: Bot, state: FSMContext) -> None:
+    if not message.text or message.text in MENU_BUTTONS:
         return
-    await _process_dream(message, bot, message.text.strip())
 
-
-@router.callback_query(F.data.startswith("rate:"))
-async def handle_rating(callback: CallbackQuery) -> None:
-    _, dream_id_str, rating_str = callback.data.split(":")
-    dream_id, rating = int(dream_id_str), int(rating_str)
-
+    text = message.text.strip()
     async with async_session() as session:
-        user = await crud.get_or_create_user(
-            session, telegram_id=callback.from_user.id,
-            username=callback.from_user.username,
-            first_name=callback.from_user.first_name,
+        user = await _get_user(session, message)
+        active = await crud.get_active_dream(session, user.id)
+
+    if active:
+        await bot.send_chat_action(message.chat.id, ChatAction.TYPING)
+        async with async_session() as session:
+            user = await _get_user(session, message)
+            try:
+                reply = await dream_service.continue_dialogue(session, user.id, text)
+                await _send_parts(message, reply)
+            except ValueError as e:
+                await message.answer(str(e), reply_markup=main_menu_keyboard())
+            except LLMServiceError as e:
+                await message.answer(
+                    f"Не удалось продолжить диалог: <code>{e}</code>",
+                    reply_markup=main_menu_keyboard(),
+                )
+        return
+
+    if len(text) < 10:
+        await message.answer(
+            "Опишите сон подробнее (минимум 10 символов) или нажмите «Новый сон».",
+            reply_markup=main_menu_keyboard(),
         )
-        await session.commit()
-        success = await dream_service.rate_dream(session, dream_id, user.id, rating)
+        return
 
-    if success:
-        await callback.answer(f"Спасибо! Оценка: {rating}/5 ⭐")
-        await callback.message.edit_reply_markup(reply_markup=None)
-    else:
-        await callback.answer("Не удалось сохранить оценку", show_alert=True)
-
-
-@router.callback_query(F.data.startswith("add_tag:"))
-async def handle_add_tag(callback: CallbackQuery, state: FSMContext) -> None:
-    dream_id = int(callback.data.split(":")[1])
-    await state.set_state(InterpretStates.waiting_for_tag)
-    await state.update_data(dream_id=dream_id)
-    await callback.answer()
-    await callback.message.answer("🏷 Введите ваш тег (одно слово или фраза):")
-
-
-@router.message(InterpretStates.waiting_for_tag)
-async def process_tag(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    dream_id = data["dream_id"]
-    tag = message.text.strip()
-
-    async with async_session() as session:
-        user = await crud.get_or_create_user(
-            session, telegram_id=message.from_user.id,
-            username=message.from_user.username,
-            first_name=message.from_user.first_name,
-        )
-        await session.commit()
-        success = await dream_service.add_user_tag(session, dream_id, user.id, tag)
-
-    await state.clear()
-    if success:
-        await message.answer(f"✅ Тег «{tag}» добавлен.")
-    else:
-        await message.answer("⚠️ Не удалось добавить тег.")
-
-
-@router.callback_query(F.data.startswith("insight:"))
-async def handle_insight(callback: CallbackQuery, state: FSMContext) -> None:
-    dream_id = int(callback.data.split(":")[1])
-    await state.set_state(InterpretStates.waiting_for_insight)
-    await state.update_data(dream_id=dream_id)
-    await callback.answer()
-    await callback.message.answer("💭 Запишите ваш инсайт или размышление о сне:")
-
-
-@router.message(InterpretStates.waiting_for_insight)
-async def process_insight(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    dream_id = data["dream_id"]
-
-    async with async_session() as session:
-        user = await crud.get_or_create_user(
-            session, telegram_id=message.from_user.id,
-            username=message.from_user.username,
-            first_name=message.from_user.first_name,
-        )
-        await session.commit()
-        success = await dream_service.save_insight(session, dream_id, user.id, message.text.strip())
-
-    await state.clear()
-    if success:
-        await message.answer("✅ Инсайт сохранён.")
-    else:
-        await message.answer("⚠️ Не удалось сохранить инсайт.")
-
-
-@router.callback_query(F.data.startswith("clarify:"))
-async def handle_clarify(callback: CallbackQuery, state: FSMContext) -> None:
-    dream_id = int(callback.data.split(":")[1])
-    await state.set_state(InterpretStates.waiting_for_clarification)
-    await state.update_data(dream_id=dream_id)
-    await callback.answer()
-    await callback.message.answer("❓ Задайте уточняющий вопрос по интерпретации:")
-
-
-@router.message(InterpretStates.waiting_for_clarification)
-async def process_clarification(message: Message, bot: Bot, state: FSMContext) -> None:
-    data = await state.get_data()
-    dream_id = data["dream_id"]
-
-    async with async_session() as session:
-        user = await crud.get_or_create_user(
-            session, telegram_id=message.from_user.id,
-            username=message.from_user.username,
-            first_name=message.from_user.first_name,
-        )
-        dream = await crud.get_dream_by_id(session, dream_id, user.id)
-        if not dream or not dream.interpretation:
-            await state.clear()
-            await message.answer("⚠️ Сон не найден.")
-            return
-
-        dream_text = crud.decrypt_dream_text(dream)
-        question = message.text.strip()
-        prev = dream.interpretation or {}
-        analysis_bits = []
-        for item in prev.get("key_images_analysis") or []:
-            if isinstance(item, dict):
-                analysis_bits.append(f"{item.get('image')}: {item.get('analysis')}")
-        combined = (
-            f"Контекст сна: {dream_text}\n\n"
-            f"Предыдущий разбор образов: {' | '.join(analysis_bits) or prev.get('closing_observation', '')}\n\n"
-            f"Уточняющий вопрос пользователя: {question}"
-        )
-
-    await state.clear()
-    await _process_dream(message, bot, combined)
+    await _process_dream(message, bot, state, text)

@@ -26,6 +26,13 @@ async def _startup() -> None:
     except Exception as e:
         logger.error("db_init_failed", error=str(e), hint="Add PostgreSQL plugin on Railway")
 
+    try:
+        from app.handlers.start import BOT_COMMANDS
+
+        await bot.set_my_commands(BOT_COMMANDS)
+    except Exception as e:
+        logger.warning("bot_commands_failed", error=str(e))
+
     if settings.webhook_url:
         try:
             await setup_webhook(bot)

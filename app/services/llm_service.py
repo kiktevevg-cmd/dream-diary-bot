@@ -4,7 +4,7 @@ import json
 import httpx
 
 from app.core.config import settings
-from app.services.prompts import REINFORCEMENT_PROMPT, SYSTEM_PROMPT
+from app.services.prompts import DIALOGUE_SYSTEM_PROMPT, REINFORCEMENT_PROMPT, SYSTEM_PROMPT
 from app.utils.logger import get_logger
 from app.utils.validators import DreamInterpretation, validate_interpretation
 
@@ -208,6 +208,42 @@ class LLMService:
             "Kimi вернул ответ, но он не прошёл проверку формата. "
             "Попробуйте переформулировать сон или повторить позже."
         )
+
+    async def continue_dialogue(
+        self,
+        *,
+        dream_text: str,
+        interpretation: dict,
+        history: list[dict[str, str]],
+        user_message: str,
+        skip_question: bool = False,
+    ) -> str:
+        reserved = interpretation.get("self_analysis_questions") or []
+        context = (
+            f"Текст сна:\n{dream_text}\n\n"
+            f"Первичная интерпретация (JSON):\n{interpretation}\n\n"
+            f"Запасные вопросы для самоанализа: {reserved}\n"
+        )
+        if skip_question:
+            context += (
+                "\nПользователь нажал «Пропустить»: не настаивай на текущем вопросе, "
+                "кратко признай это и предложи другой угол или следующий вопрос.\n"
+            )
+
+        messages: list[dict[str, str]] = [
+            {"role": "system", "content": DIALOGUE_SYSTEM_PROMPT},
+            {"role": "user", "content": context},
+            {"role": "assistant", "content": "Контекст принял. Продолжаем разбор в диалоге."},
+        ]
+        for item in history[-20:]:
+            role = item.get("role")
+            content = item.get("content")
+            if role in {"user", "assistant"} and content:
+                messages.append({"role": role, "content": content})
+        messages.append({"role": "user", "content": user_message})
+
+        # Для диалога JSON-режим не нужен
+        return await self._call_llm(messages, json_mode=False)
 
 
 llm_service = LLMService()

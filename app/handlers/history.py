@@ -4,6 +4,7 @@ from aiogram.types import Message
 
 from app.db import crud
 from app.db.models import async_session
+from app.keyboards.buttons import main_menu_keyboard
 
 router = Router()
 
@@ -20,21 +21,30 @@ async def cmd_history(message: Message) -> None:
         dreams = await crud.get_user_dreams(session, user.id, limit=10)
 
     if not dreams:
-        await message.answer("📭 У вас пока нет записанных снов. Опишите свой первый сон!")
+        await message.answer(
+            "Пока нет записанных снов. Нажмите «Новый сон».",
+            reply_markup=main_menu_keyboard(),
+        )
         return
 
     lines = ["📖 <b>Последние сны</b>\n"]
     for i, dream in enumerate(dreams, 1):
         date = dream.created_at.strftime("%d.%m.%Y")
         emotion = dream.emotional_focus or "—"
-        tags = " ".join(f"#{t}" for t in (dream.tags or []))
-        text_preview = crud.decrypt_dream_text(dream)[:80]
-        if len(crud.decrypt_dream_text(dream)) > 80:
-            text_preview += "..."
+        text_preview = crud.decrypt_dream_text(dream)
+        if len(text_preview) > 100:
+            text_preview = text_preview[:100] + "..."
+
+        interp = dream.interpretation or {}
+        summary = dream.dialogue_summary or interp.get("closing_observation") or "—"
+        if len(summary) > 180:
+            summary = summary[:180] + "..."
+
+        status = "диалог открыт" if dream.dialogue_status == "active" else "завершён"
         lines.append(
-            f"<b>{i}.</b> {date} | 💭 {emotion}\n"
-            f"   {text_preview}\n"
-            f"   {tags}\n"
+            f"<b>{i}.</b> {date} | 💭 {emotion} | {status}\n"
+            f"<i>Сон:</i> {text_preview}\n"
+            f"<i>Резюме:</i> {summary}\n"
         )
 
-    await message.answer("\n".join(lines))
+    await message.answer("\n".join(lines), reply_markup=main_menu_keyboard())
